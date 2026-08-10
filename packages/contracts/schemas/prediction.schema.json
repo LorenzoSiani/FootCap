@@ -23,6 +23,7 @@
       "$ref": "definitions.schema.json#/$defs/EvaluationContext"
     },
     "publication_state": {
+      "description": "Present, and required, only when evaluation_context is PRODUCTION. Must be genuinely absent -- not present with a null value -- for BACKTEST and EXPERIMENT records, whose execution/result state is represented by the linked Prediction Run's status instead (Architecture Baseline sections 7.7-7.8: 'publication_state applies only to PRODUCTION Prediction records').",
       "$ref": "definitions.schema.json#/$defs/PublicationState"
     },
     "supersedes_prediction_id": {
@@ -57,11 +58,25 @@
     "match_id",
     "prediction_horizon",
     "evaluation_context",
-    "publication_state",
     "home_probability",
     "draw_probability",
     "away_probability",
     "created_at"
   ],
+  "$comment": "publication_state applies only to PRODUCTION Prediction records (Architecture Baseline section 7.8). This if/then/else makes that a structural rule: required when evaluation_context is PRODUCTION; genuinely absent (the 'not: required' form rejects the key whether or not it carries a null value) when evaluation_context is BACKTEST or EXPERIMENT. Resolved in the Phase 0.4.1A read-only review; no schema-encoded lifecycle transition logic is introduced by this conditional.",
+  "if": {
+    "required": ["evaluation_context"],
+    "properties": {
+      "evaluation_context": { "const": "PRODUCTION" }
+    }
+  },
+  "then": {
+    "required": ["publication_state"]
+  },
+  "else": {
+    "not": {
+      "required": ["publication_state"]
+    }
+  },
   "additionalProperties": false
 }
