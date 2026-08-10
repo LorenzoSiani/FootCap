@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.footcap.dev/schemas/backtest-fold.schema.json",
+  "title": "Backtest Fold",
+  "description": "One rolling-origin fold and the minimum identifiers required to reconstruct its lineage: Backtest Run -> Backtest Fold -> Training Feature Set -> Training Run -> Model Artifact -> Prediction Feature Snapshot(s) -> BACKTEST Prediction Run(s) (Architecture Baseline section 9). Result content (outcomes, metrics, baseline comparison) is intentionally out of scope for this identity/provenance-focused Phase 0 contract, consistent with the backtesting engine itself being out of scope for this task; a dedicated schema for result payloads can be added once that engine exists. Positional correspondence between prediction_cutoffs, prediction_feature_snapshot_ids, and prediction_run_ids (one triple per predicted fixture) is a domain-logic invariant, not enforced by this schema.",
+  "type": "object",
+  "properties": {
+    "backtest_fold_id": {
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "backtest_run_id": {
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "training_cutoff": {
+      "$ref": "definitions.schema.json#/$defs/UtcTimestamp"
+    },
+    "prediction_cutoffs": {
+      "type": "array",
+      "items": {
+        "$ref": "definitions.schema.json#/$defs/UtcTimestamp"
+      },
+      "minItems": 1,
+      "description": "One cutoff per fixture predicted within this fold; a fold may predict multiple fixtures before the next retraining cutoff."
+    },
+    "training_feature_set_id": {
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "training_run_id": {
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "artifact_id": {
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "prediction_feature_snapshot_ids": {
+      "type": "array",
+      "items": {
+        "$ref": "definitions.schema.json#/$defs/Identifier"
+      },
+      "minItems": 1
+    },
+    "prediction_run_ids": {
+      "type": "array",
+      "items": {
+        "$ref": "definitions.schema.json#/$defs/Identifier"
+      },
+      "minItems": 1,
+      "description": "BACKTEST-context Prediction Runs produced by this fold."
+    },
+    "temporal_classification": {
+      "$ref": "definitions.schema.json#/$defs/TemporalClassification"
+    },
+    "created_at": {
+      "$ref": "definitions.schema.json#/$defs/UtcTimestamp"
+    }
+  },
+  "required": [
+    "backtest_fold_id",
+    "backtest_run_id",
+    "training_cutoff",
+    "prediction_cutoffs",
+    "training_feature_set_id",
+    "training_run_id",
+    "artifact_id",
+    "prediction_feature_snapshot_ids",
+    "prediction_run_ids",
+    "temporal_classification",
+    "created_at"
+  ],
+  "additionalProperties": false
+}

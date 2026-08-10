@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.footcap.dev/schemas/prediction.schema.json",
+  "title": "Prediction",
+  "description": "The immutable prediction record plus its authorized publication_state lifecycle (Architecture Baseline sections 7.7-7.8). This schema represents STATE ONLY. It does not encode or enforce: (a) which publication-state transitions are valid (DRAFT to PUBLISHED, PUBLISHED to SUPERSEDED, PUBLISHED to WITHDRAWN, and no other) -- that is domain/application logic in engine/src/footcap_engine/predictions/; (b) the official-prediction uniqueness invariant (at most one PUBLISHED record per match_id + PRE_MATCH horizon + PRODUCTION context) -- that is a database/domain concern; (c) that the three probability fields sum to a valid distribution within tolerance -- that is a numeric domain-logic check, not a structural JSON Schema constraint. This schema also does not itself restrict public API exposure: it describes the full internal shape across all lifecycle states, including DRAFT, which is persistent and internal and must never be served by a public endpoint (Architecture Baseline sections 10.2-10.3); that filtering is enforced by the Application API layer, not by this schema.",
+  "type": "object",
+  "properties": {
+    "prediction_id": {
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "prediction_run_id": {
+      "description": "Immutable reference to the Prediction Run that produced this Prediction.",
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "match_id": {
+      "description": "FootCap-internal, provider-independent match identity (ADR-009 decision 11).",
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "prediction_horizon": {
+      "$ref": "definitions.schema.json#/$defs/PredictionHorizon"
+    },
+    "evaluation_context": {
+      "$ref": "definitions.schema.json#/$defs/EvaluationContext"
+    },
+    "publication_state": {
+      "$ref": "definitions.schema.json#/$defs/PublicationState"
+    },
+    "supersedes_prediction_id": {
+      "description": "Present only on a PRODUCTION replacement; points to its immediate prior official Prediction. Absent for a first-ever publication. Must remain within the same match_id + PRE_MATCH + PRODUCTION and must not create cycles, branches, or cross-match/context links (Architecture Baseline section 7.8) -- not enforced by this schema.",
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "home_probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Home win probability. Structural range only; that home_probability + draw_probability + away_probability sum to a valid distribution within tolerance is a domain-logic check, not enforced here."
+    },
+    "draw_probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Draw probability. See home_probability for the distribution-sum caveat."
+    },
+    "away_probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Away win probability. See home_probability for the distribution-sum caveat."
+    },
+    "created_at": {
+      "$ref": "definitions.schema.json#/$defs/UtcTimestamp"
+    }
+  },
+  "required": [
+    "prediction_id",
+    "prediction_run_id",
+    "match_id",
+    "prediction_horizon",
+    "evaluation_context",
+    "publication_state",
+    "home_probability",
+    "draw_probability",
+    "away_probability",
+    "created_at"
+  ],
+  "additionalProperties": false
+}

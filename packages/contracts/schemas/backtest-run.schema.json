@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.footcap.dev/schemas/backtest-run.schema.json",
+  "title": "Backtest Run",
+  "description": "Minimal top-level identity/provenance container for a rolling-origin backtest (Architecture Baseline section 9). Detailed execution and lineage content belongs to Backtest Fold and the entities it links to (ADR-009 decision 8); this schema intentionally does not embed folds or a backtesting configuration object. The Architecture Baseline does not enumerate further top-level Backtest Run fields beyond its role as the Fold container and its temporal_classification (section 5.5); additional fields, and the relationship direction to the common Job Run provenance record, remain an open Phase 0 schema-design question (see packages/contracts/README.md).",
+  "type": "object",
+  "properties": {
+    "backtest_run_id": {
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "temporal_classification": {
+      "$ref": "definitions.schema.json#/$defs/TemporalClassification"
+    },
+    "created_at": {
+      "$ref": "definitions.schema.json#/$defs/UtcTimestamp"
+    }
+  },
+  "required": ["backtest_run_id", "temporal_classification", "created_at"],
+  "additionalProperties": false
+}

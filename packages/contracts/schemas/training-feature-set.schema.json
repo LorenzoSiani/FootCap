@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.footcap.dev/schemas/training-feature-set.schema.json",
+  "title": "Training Feature Set",
+  "description": "Identity and provenance of the full immutable feature collection consumed by one Training Run (Architecture Baseline section 7.4). May span many matches, dates, and cutoffs. Represents identity/provenance only, not the statistical feature payload/vector itself. Always distinct from a Prediction Feature Snapshot (Architecture Baseline section 7.9) even when produced by the same feature logic; the two must never be treated as interchangeable.",
+  "type": "object",
+  "properties": {
+    "training_feature_set_id": {
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "training_feature_set_hash": {
+      "description": "Identifies the exact normalized fitting content.",
+      "$ref": "definitions.schema.json#/$defs/Hash"
+    },
+    "dataset_id": {
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "dataset_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Version of the referenced dataset."
+    },
+    "feature_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifies the feature-generation logic only, not the resulting training matrix (Architecture Baseline section 7.3)."
+    },
+    "training_window_start": {
+      "$ref": "definitions.schema.json#/$defs/UtcTimestamp"
+    },
+    "training_window_end": {
+      "$ref": "definitions.schema.json#/$defs/UtcTimestamp"
+    },
+    "temporal_classification": {
+      "$ref": "definitions.schema.json#/$defs/TemporalClassification"
+    },
+    "feature_run_id": {
+      "description": "The Feature Run that produced this Training Feature Set.",
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "created_at": {
+      "$ref": "definitions.schema.json#/$defs/UtcTimestamp"
+    }
+  },
+  "required": [
+    "training_feature_set_id",
+    "training_feature_set_hash",
+    "dataset_id",
+    "dataset_version",
+    "feature_version",
+    "training_window_start",
+    "training_window_end",
+    "temporal_classification",
+    "feature_run_id",
+    "created_at"
+  ],
+  "additionalProperties": false
+}
