@@ -12,11 +12,13 @@ from .models import (
     ApiFootballLeague,
     ApiFootballMalformedResponseError,
     ApiFootballProviderError,
+    ApiFootballTeam,
     HttpRequestIdentity,
     LeagueFetchResult,
     LogicalRequestIdentity,
     RawContent,
     RawObservation,
+    TeamsFetchResult,
 )
 
 __all__ = [
@@ -27,9 +29,11 @@ __all__ = [
     "ApiFootballLeague",
     "ApiFootballMalformedResponseError",
     "ApiFootballProviderError",
+    "ApiFootballTeam",
     "HttpRequestIdentity",
     "LeagueFetchResult",
     "LogicalRequestIdentity",
     "RawContent",
     "RawObservation",
+    "TeamsFetchResult",
 ]

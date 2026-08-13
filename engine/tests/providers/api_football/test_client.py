@@ -7,6 +7,7 @@ The sys.path bootstrap below is required only because
 engine/pyproject.toml (out of scope for this task) does not add
 engine/src to pythonpath.
 """
+import dataclasses
 import hashlib
 import json
 import sys
@@ -27,6 +28,8 @@ from footcap_engine.providers.api_football import (
     ApiFootballMalformedResponseError,
     ApiFootballProviderError,
 )
+
+_TEAMS_KEYS = ("id", "name", "code", "country", "founded", "national", "logo")
 
 API_KEY = "test-fake-key-do-not-use"
 
@@ -290,3 +293,378 @@ def test_observation_never_contains_auth_header_or_key():
     assert "super-secret-do-not-leak" not in observation.request_parameters.values()
     assert "super-secret-do-not-leak" not in repr(observation.logical_request)
     assert "super-secret-do-not-leak" not in repr(observation.http_request)
+
+
+# =====================================================================
+# TEAMS (0.5.3B) -- GET /teams?league=<id>&season=<year>
+# =====================================================================
+
+def _valid_teams_envelope(response: list, paging_total: int = 1) -> bytes:
+    return json.dumps(
+        {
+            "get": "teams",
+            "parameters": {"league": "135", "season": "2023"},
+            "errors": [],
+            "results": len(response),
+            "paging": {"current": 1, "total": paging_total},
+            "response": response,
+        }
+    ).encode("utf-8")
+
+
+def _team_entry(**overrides) -> dict:
+    team = {
+        "id": 505,
+        "name": "Inter",
+        "code": "INT",
+        "country": "Italy",
+        "founded": 1908,
+        "national": False,
+        "logo": "https://example.test/teams/505.png",
+    }
+    team.update(overrides)
+    return {
+        "team": team,
+        "venue": {"id": 907, "name": "Giuseppe Meazza", "city": "Milano", "capacity": 75923, "surface": "grass"},
+    }
+
+
+VALID_TEAM_ENTRY = _team_entry()
+SECOND_VALID_TEAM_ENTRY = _team_entry(id=506, name="Milan", code="MIL")
+
+
+# ==== INPUT (matrix items 1-8) ====
+
+def test_teams_valid_league_and_season_accepted():
+    client = _client(_handler_returning(200, _valid_teams_envelope([VALID_TEAM_ENTRY])))
+    result = client.get_teams(135, 2023, job_run_id="job-1")
+    assert result.teams[0].provider_team_id == 505
+
+
+def _handler_that_must_not_be_called(request: httpx.Request) -> httpx.Response:
+    # A "rejected before HTTP" test is only meaningful if the transport
+    # genuinely was never reached. Failing loudly from inside the
+    # handler proves that, rather than merely asserting that some
+    # ApiFootballError eventually surfaced.
+    pytest.fail("transport handler must not be invoked for input rejected before HTTP")
+
+
+@pytest.mark.parametrize("league_id", [True, 0, -135, "135"])
+def test_teams_invalid_league_id_rejected_before_http(league_id):
+    client = _client(_handler_that_must_not_be_called)
+    with pytest.raises(ApiFootballError):
+        client.get_teams(league_id, 2023, job_run_id="job-1")
+
+
+@pytest.mark.parametrize("season", [True, 999, 10000, "2023"])
+def test_teams_invalid_season_rejected_before_http(season):
+    client = _client(_handler_that_must_not_be_called)
+    with pytest.raises(ApiFootballError):
+        client.get_teams(135, season, job_run_id="job-1")
+
+
+@pytest.mark.parametrize("job_run_id", ["", "   ", 123])
+def test_teams_invalid_job_run_id_rejected_before_http(job_run_id):
+    client = _client(_handler_that_must_not_be_called)
+    with pytest.raises(ApiFootballError):
+        client.get_teams(135, 2023, job_run_id=job_run_id)
+
+
+# ==== REQUEST (matrix items 9-15) ====
+
+def test_teams_request_shape():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["host"] = request.url.host
+        seen["path"] = request.url.path
+        seen["league"] = request.url.params.get("league")
+        seen["season"] = request.url.params.get("season")
+        seen["auth"] = request.headers.get("x-apisports-key")
+        return httpx.Response(200, content=_valid_teams_envelope([VALID_TEAM_ENTRY]))
+
+    client = _client(handler, api_key=API_KEY)
+    client.get_teams(135, 2023, job_run_id="job-1")
+    assert seen["host"] == "v3.football.api-sports.io"
+    assert seen["path"] == "/teams"
+    assert seen["league"] == "135"
+    assert seen["season"] == "2023"
+    assert seen["auth"] == API_KEY
+
+
+def test_teams_logical_identity_contains_league_and_season_but_not_credentials_or_job_run_id():
+    client = _client(_handler_returning(200, _valid_teams_envelope([VALID_TEAM_ENTRY])), api_key="key-one")
+    first = client.get_teams(135, 2023, job_run_id="job-1")
+
+    client2 = _client(_handler_returning(200, _valid_teams_envelope([VALID_TEAM_ENTRY])), api_key="key-two")
+    second = client2.get_teams(135, 2023, job_run_id="job-2")
+
+    assert dict(first.observation.logical_request.parameters) == {"league": "135", "season": "2023"}
+    assert first.observation.logical_request == second.observation.logical_request
+    assert "key-one" not in repr(first.observation.logical_request)
+    assert "job-1" not in repr(first.observation.logical_request)
+
+
+# ==== RAW PROVENANCE (matrix items 16-20) ====
+
+def test_teams_exact_bytes_and_fingerprint_retained():
+    exact_bytes = (
+        b'{"get":"teams","parameters":{"league":"135",   "season":"2023"},"errors":[],"results":1,'
+        b'"paging":{"current":1,"total":1},'
+        b'"response":[{"team":{"id":505,"name":"Inter","code":"INT","country":"Italy",'
+        b'"founded":1908,"national":false,"logo":null},"venue":{"id":907}}]}'
+    )
+    client = _client(_handler_returning(200, exact_bytes))
+    result = client.get_teams(135, 2023, job_run_id="job-1")
+
+    assert result.observation.raw_content.body == exact_bytes
+    assert result.observation.raw_content.content_fingerprint == hashlib.sha256(exact_bytes).hexdigest()
+
+    reserialized = json.dumps(json.loads(exact_bytes)).encode("utf-8")
+    assert reserialized != exact_bytes
+    assert hashlib.sha256(reserialized).hexdigest() != result.observation.raw_content.content_fingerprint
+
+
+def test_teams_raw_observation_request_parameters_match_league_and_season():
+    client = _client(_handler_returning(200, _valid_teams_envelope([VALID_TEAM_ENTRY])))
+    result = client.get_teams(135, 2023, job_run_id="job-1")
+    assert dict(result.observation.request_parameters) == {"league": "135", "season": "2023"}
+    assert API_KEY not in result.observation.request_parameters.values()
+
+
+def test_teams_timestamps_are_utc():
+    client = _client(_handler_returning(200, _valid_teams_envelope([VALID_TEAM_ENTRY])))
+    result = client.get_teams(135, 2023, job_run_id="job-1")
+    assert result.observation.requested_at.tzinfo is not None
+    assert result.observation.received_at.tzinfo is not None
+    assert result.observation.received_at >= result.observation.requested_at
+
+
+def test_observation_retained_on_malformed_team_response():
+    bad_entry = _team_entry()
+    del bad_entry["team"]["logo"]
+    client = _client(_handler_returning(200, _valid_teams_envelope([bad_entry])))
+    with pytest.raises(ApiFootballMalformedResponseError) as excinfo:
+        client.get_teams(135, 2023, job_run_id="job-1")
+    assert excinfo.value.observation is not None
+    assert excinfo.value.observation.http_status == 200
+
+
+# ==== ENVELOPE / HTTP (matrix items 21-27) ====
+
+def test_teams_valid_nonempty_response_accepted():
+    client = _client(_handler_returning(200, _valid_teams_envelope([VALID_TEAM_ENTRY])))
+    result = client.get_teams(135, 2023, job_run_id="job-1")
+    assert isinstance(result.teams, tuple)
+    assert len(result.teams) == 1
+
+
+def test_teams_valid_empty_response_returns_empty_tuple():
+    client = _client(_handler_returning(200, _valid_teams_envelope([])))
+    result = client.get_teams(135, 2023, job_run_id="job-1")
+    assert result.teams == ()
+    assert result.observation is not None
+
+
+def test_teams_malformed_json_rejected():
+    client = _client(_handler_returning(200, b"not json at all {"))
+    with pytest.raises(ApiFootballMalformedResponseError) as excinfo:
+        client.get_teams(135, 2023, job_run_id="job-1")
+    assert excinfo.value.observation is not None
+
+
+def test_teams_malformed_envelope_rejected():
+    body = json.dumps({"get": "teams"}).encode("utf-8")
+    client = _client(_handler_returning(200, body))
+    with pytest.raises(ApiFootballMalformedResponseError) as excinfo:
+        client.get_teams(135, 2023, job_run_id="job-1")
+    assert excinfo.value.observation is not None
+
+
+def test_teams_provider_errors_rejected():
+    body = json.dumps(
+        {
+            "get": "teams",
+            "parameters": {"league": "135", "season": "2023"},
+            "errors": {"season": "Invalid season"},
+            "results": 0,
+            "paging": {"current": 1, "total": 1},
+            "response": [],
+        }
+    ).encode("utf-8")
+    client = _client(_handler_returning(200, body))
+    with pytest.raises(ApiFootballProviderError) as excinfo:
+        client.get_teams(135, 2023, job_run_id="job-1")
+    assert excinfo.value.observation is not None
+    assert excinfo.value.provider_errors == {"season": "Invalid season"}
+
+
+def test_teams_http_non_success_rejected():
+    client = _client(_handler_returning(500, b"internal error"))
+    with pytest.raises(ApiFootballHttpError) as excinfo:
+        client.get_teams(135, 2023, job_run_id="job-1")
+    assert excinfo.value.status_code == 500
+    assert excinfo.value.observation is not None
+
+
+def test_teams_single_complete_page_accepted():
+    client = _client(_handler_returning(200, _valid_teams_envelope([VALID_TEAM_ENTRY])))
+    result = client.get_teams(135, 2023, job_run_id="job-1")
+    assert result.teams[0].provider_team_id == 505
+
+
+def _teams_envelope_with_paging(response: list, paging: dict) -> bytes:
+    return json.dumps(
+        {
+            "get": "teams",
+            "parameters": {"league": "135", "season": "2023"},
+            "errors": [],
+            "results": len(response),
+            "paging": paging,
+            "response": response,
+        }
+    ).encode("utf-8")
+
+
+@pytest.mark.parametrize(
+    "paging",
+    [
+        {"total": 1},  # current missing
+        {"current": True, "total": 1},
+        {"current": "1", "total": 1},
+        {"current": 0, "total": 1},
+        {"current": -1, "total": 1},
+        {"current": 2, "total": 1},
+        {"current": 1},  # total missing
+        {"current": 1, "total": True},
+        {"current": 1, "total": "1"},
+        {"current": 1, "total": 0},
+        {"current": 1, "total": -1},
+        {"current": 1, "total": 2},
+    ],
+)
+def test_teams_invalid_paging_state_rejected(paging):
+    body = _teams_envelope_with_paging([VALID_TEAM_ENTRY], paging)
+    client = _client(_handler_returning(200, body))
+    with pytest.raises(ApiFootballMalformedResponseError) as excinfo:
+        client.get_teams(135, 2023, job_run_id="job-1")
+    assert excinfo.value.observation is not None
+    assert excinfo.value.observation.raw_content.body == body
+
+
+# ==== FIX 1: json.loads(bytes) can raise UnicodeDecodeError, not only
+# json.JSONDecodeError -- both must retain RawObservation. Verified for
+# both get_teams() and get_league(), since both share the same
+# malformed-decode handling pattern. ====
+
+INVALID_UTF16_BYTES = b"\xff\xfe\xfd"  # not valid JSON and not decodable text
+
+
+def test_teams_invalidly_encoded_bytes_rejected_with_observation_retained():
+    client = _client(_handler_returning(200, INVALID_UTF16_BYTES))
+    with pytest.raises(ApiFootballMalformedResponseError) as excinfo:
+        client.get_teams(135, 2023, job_run_id="job-1")
+    assert excinfo.value.observation is not None
+    assert excinfo.value.observation.raw_content.body == INVALID_UTF16_BYTES
+
+
+def test_league_invalidly_encoded_bytes_rejected_with_observation_retained():
+    client = _client(_handler_returning(200, INVALID_UTF16_BYTES))
+    with pytest.raises(ApiFootballMalformedResponseError) as excinfo:
+        client.get_league(135, job_run_id="job-1")
+    assert excinfo.value.observation is not None
+    assert excinfo.value.observation.raw_content.body == INVALID_UTF16_BYTES
+
+
+# ==== DTO (matrix items 28-38) ====
+
+def test_teams_dto_full_fields_retained():
+    client = _client(_handler_returning(200, _valid_teams_envelope([VALID_TEAM_ENTRY])))
+    team = client.get_teams(135, 2023, job_run_id="job-1").teams[0]
+    assert team.provider_team_id == 505
+    assert team.name == "Inter"
+    assert team.code == "INT"
+    assert team.country == "Italy"
+    assert team.founded == 1908
+    assert team.national is False
+    assert team.logo == "https://example.test/teams/505.png"
+
+
+def test_teams_dto_nullable_fields_accept_null():
+    entry = _team_entry(code=None, country=None, founded=None, logo=None)
+    client = _client(_handler_returning(200, _valid_teams_envelope([entry])))
+    team = client.get_teams(135, 2023, job_run_id="job-1").teams[0]
+    assert team.code is None
+    assert team.country is None
+    assert team.founded is None
+    assert team.logo is None
+    assert team.national is False  # not nullable; still correctly populated
+
+
+# ==== STRUCTURAL KEY PRESENCE (matrix items 39-45) ====
+
+@pytest.mark.parametrize("missing_key", _TEAMS_KEYS)
+def test_teams_missing_required_key_rejected(missing_key):
+    entry = _team_entry()
+    del entry["team"][missing_key]
+    client = _client(_handler_returning(200, _valid_teams_envelope([entry])))
+    with pytest.raises(ApiFootballMalformedResponseError) as excinfo:
+        client.get_teams(135, 2023, job_run_id="job-1")
+    assert missing_key in str(excinfo.value)
+
+
+# ==== COLLECTION (matrix items 55-59) ====
+
+def test_teams_provider_order_preserved():
+    client = _client(_handler_returning(200, _valid_teams_envelope([VALID_TEAM_ENTRY, SECOND_VALID_TEAM_ENTRY])))
+    result = client.get_teams(135, 2023, job_run_id="job-1")
+    assert [team.provider_team_id for team in result.teams] == [505, 506]
+
+
+def test_teams_duplicate_provider_team_ids_rejected():
+    client = _client(_handler_returning(200, _valid_teams_envelope([VALID_TEAM_ENTRY, VALID_TEAM_ENTRY])))
+    with pytest.raises(ApiFootballMalformedResponseError) as excinfo:
+        client.get_teams(135, 2023, job_run_id="job-1")
+    assert "505" in str(excinfo.value)
+    assert excinfo.value.observation is not None
+
+
+def test_teams_malformed_second_entry_fails_whole_result_no_partial_return():
+    bad_entry = _team_entry(id=506)
+    del bad_entry["team"]["code"]
+    client = _client(_handler_returning(200, _valid_teams_envelope([VALID_TEAM_ENTRY, bad_entry, VALID_TEAM_ENTRY])))
+    with pytest.raises(ApiFootballMalformedResponseError) as excinfo:
+        client.get_teams(135, 2023, job_run_id="job-1")
+    assert excinfo.value.observation is not None  # nothing about a partial TeamsFetchResult is ever returned
+
+
+# ==== BOUNDARIES (matrix items 60-64) ====
+
+def test_teams_venue_ignored_at_dto_level_but_present_in_raw_bytes():
+    client = _client(_handler_returning(200, _valid_teams_envelope([VALID_TEAM_ENTRY])))
+    result = client.get_teams(135, 2023, job_run_id="job-1")
+
+    team = result.teams[0]
+    assert not hasattr(team, "venue")
+    assert {f.name for f in dataclasses.fields(team)} == {
+        "provider_team_id",
+        "name",
+        "code",
+        "country",
+        "founded",
+        "national",
+        "logo",
+    }
+    # exact venue bytes remain fully recoverable from the raw response
+    assert b'"venue"' in result.observation.raw_content.body
+    assert b'"Giuseppe Meazza"' in result.observation.raw_content.body
+
+
+def test_teams_dto_never_carries_league_season_or_footcap_identity():
+    client = _client(_handler_returning(200, _valid_teams_envelope([VALID_TEAM_ENTRY])))
+    result = client.get_teams(135, 2023, job_run_id="job-1")
+    team_fields = {f.name for f in dataclasses.fields(result.teams[0])}
+    result_fields = {f.name for f in dataclasses.fields(result)}
+    assert "league_id" not in team_fields and "season" not in team_fields
+    assert "league_id" not in result_fields and "season" not in result_fields
+    assert not any("team_id" == name or "footcap" in name.lower() for name in team_fields)

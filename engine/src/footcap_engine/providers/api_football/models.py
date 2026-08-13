@@ -325,3 +325,77 @@ class LeagueFetchResult:
             raise ApiFootballError("observation must be a RawObservation")
         if self.league is not None and not isinstance(self.league, ApiFootballLeague):
             raise ApiFootballError("league must be an ApiFootballLeague or None")
+
+
+@dataclass(frozen=True)
+class ApiFootballTeam:
+    """Provider-shaped Team DTO. Deliberately NOT a FootCap normalized
+    Team -- it retains the provider's own team ID, and ADR-011 identity
+    resolution into a FootCap team identity is explicitly future work,
+    not implemented here. Venue data is intentionally not modeled here;
+    the exact venue bytes remain recoverable from RawContent regardless
+    of what this DTO parses."""
+
+    provider_team_id: int
+    name: str
+    code: str | None
+    country: str | None
+    founded: int | None
+    national: bool
+    logo: str | None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.provider_team_id, bool) or not isinstance(self.provider_team_id, int):
+            raise ApiFootballMalformedResponseError(
+                f"team.id must be an int, got {type(self.provider_team_id)!r}"
+            )
+        if self.provider_team_id <= 0:
+            raise ApiFootballMalformedResponseError("team.id must be a positive integer")
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise ApiFootballMalformedResponseError(f"team.name must be a non-blank string, got {self.name!r}")
+        if self.code is not None and (not isinstance(self.code, str) or not self.code.strip()):
+            raise ApiFootballMalformedResponseError("team.code must be null or a non-blank string")
+        if self.country is not None and (not isinstance(self.country, str) or not self.country.strip()):
+            raise ApiFootballMalformedResponseError("team.country must be null or a non-blank string")
+        if self.founded is not None:
+            if isinstance(self.founded, bool) or not isinstance(self.founded, int):
+                raise ApiFootballMalformedResponseError(
+                    f"team.founded must be null or an int, got {type(self.founded)!r}"
+                )
+            if self.founded <= 0:
+                raise ApiFootballMalformedResponseError("team.founded must be a positive integer when present")
+        if not isinstance(self.national, bool):
+            raise ApiFootballMalformedResponseError(f"team.national must be a bool, got {type(self.national)!r}")
+        if self.logo is not None and (not isinstance(self.logo, str) or not self.logo.strip()):
+            raise ApiFootballMalformedResponseError("team.logo must be null or a non-blank string")
+
+
+@dataclass(frozen=True)
+class TeamsFetchResult:
+    """Result of one get_teams() call. The raw observation always
+    remains available for a successful HTTP response, even when the
+    provider's response list is empty (ADR-011: raw provenance is never
+    discarded). teams preserves exact provider response order."""
+
+    observation: RawObservation
+    teams: tuple[ApiFootballTeam, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.observation, RawObservation):
+            raise ApiFootballError("observation must be a RawObservation")
+        if not isinstance(self.teams, tuple):
+            raise ApiFootballError(f"teams must be a tuple, got {type(self.teams)!r}")
+        # Defense at both boundaries is intentional: _parse_teams() in
+        # client.py already rejects duplicates found in a live provider
+        # response, but this model must not be directly constructible
+        # with a contradictory duplicate-identity state either -- never
+        # silently deduplicated, never silently reordered.
+        seen_ids: set[int] = set()
+        for team in self.teams:
+            if not isinstance(team, ApiFootballTeam):
+                raise ApiFootballError("teams must contain only ApiFootballTeam instances")
+            if team.provider_team_id in seen_ids:
+                raise ApiFootballError(
+                    f"teams must not contain duplicate provider_team_id values: {team.provider_team_id}"
+                )
+            seen_ids.add(team.provider_team_id)

@@ -8,6 +8,7 @@ The sys.path bootstrap below is required only because
 engine/pyproject.toml (out of scope for this task) does not add
 engine/src to pythonpath.
 """
+import dataclasses
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,11 +25,13 @@ from footcap_engine.providers.api_football import (
     ApiFootballError,
     ApiFootballLeague,
     ApiFootballMalformedResponseError,
+    ApiFootballTeam,
     HttpRequestIdentity,
     LeagueFetchResult,
     LogicalRequestIdentity,
     RawContent,
     RawObservation,
+    TeamsFetchResult,
 )
 
 REQUESTED = datetime(2026, 8, 10, 12, 0, 0, tzinfo=timezone.utc)
@@ -286,6 +289,112 @@ def test_league_fetch_result_rejects_wrong_league_type():
         LeagueFetchResult(observation=_observation(), league="not a league")
 
 
+# ==== TEAM DTO (matrix items 28-38, 46-54) ====
+
+def _team(**overrides) -> ApiFootballTeam:
+    fields = dict(
+        provider_team_id=505,
+        name="Inter",
+        code="INT",
+        country="Italy",
+        founded=1908,
+        national=False,
+        logo="https://example.test/teams/505.png",
+    )
+    fields.update(overrides)
+    return ApiFootballTeam(**fields)
+
+
+def test_team_provider_id_and_name_retained():
+    team = _team()
+    assert team.provider_team_id == 505
+    assert team.name == "Inter"
+
+
+def test_team_nullable_fields_accept_none():
+    team = _team(code=None, country=None, founded=None, logo=None)
+    assert team.code is None
+    assert team.country is None
+    assert team.founded is None
+    assert team.logo is None
+
+
+def test_team_national_bool_retained():
+    assert _team(national=True).national is True
+    assert _team(national=False).national is False
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"provider_team_id": True},  # bool rejected
+        {"provider_team_id": 0},  # non-positive rejected
+        {"provider_team_id": -505},  # negative rejected
+        {"name": ""},  # blank rejected
+        {"name": "   "},  # whitespace-only rejected
+        {"code": ""},  # blank (not None) rejected
+        {"country": "   "},  # whitespace-only (not None) rejected
+        {"founded": True},  # bool rejected
+        {"founded": 0},  # non-positive rejected
+        {"founded": -1908},  # negative rejected
+        {"national": 1},  # int truthy, not accepted as bool
+        {"national": None},  # null rejected -- national is required
+        {"logo": ""},  # blank (not None) rejected
+    ],
+)
+def test_team_invalid_values_rejected(overrides):
+    with pytest.raises(ApiFootballMalformedResponseError):
+        _team(**overrides)
+
+
+# ==== TeamsFetchResult (matrix items 55, 16-17 collection immutability) ====
+
+def test_teams_fetch_result_accepts_empty_tuple():
+    result = TeamsFetchResult(observation=_observation(), teams=())
+    assert result.teams == ()
+
+
+def test_teams_fetch_result_accepts_tuple_of_teams():
+    result = TeamsFetchResult(observation=_observation(), teams=(_team(), _team(provider_team_id=506)))
+    assert isinstance(result.teams, tuple)
+    assert len(result.teams) == 2
+
+
+def test_teams_fetch_result_rejects_non_tuple_collection():
+    with pytest.raises(ApiFootballError):
+        TeamsFetchResult(observation=_observation(), teams=[_team()])  # list, not tuple
+
+
+def test_teams_fetch_result_rejects_non_team_item():
+    with pytest.raises(ApiFootballError):
+        TeamsFetchResult(observation=_observation(), teams=("not a team",))
+
+
+# ==== 0.5.3D FIX 3: TeamsFetchResult itself rejects duplicate provider_team_id,
+# not only the _parse_teams() parser -- defense at both boundaries. ====
+
+def test_teams_fetch_result_accepts_unique_provider_team_ids():
+    result = TeamsFetchResult(observation=_observation(), teams=(_team(provider_team_id=505), _team(provider_team_id=506)))
+    assert [team.provider_team_id for team in result.teams] == [505, 506]
+
+
+def test_teams_fetch_result_rejects_duplicate_provider_team_ids():
+    with pytest.raises(ApiFootballError):
+        TeamsFetchResult(observation=_observation(), teams=(_team(provider_team_id=505), _team(provider_team_id=505)))
+
+
+def test_teams_fetch_result_preserves_original_tuple_order():
+    ordered = (_team(provider_team_id=507), _team(provider_team_id=505), _team(provider_team_id=506))
+    result = TeamsFetchResult(observation=_observation(), teams=ordered)
+    assert [team.provider_team_id for team in result.teams] == [507, 505, 506]
+
+
+def test_team_dataclass_is_frozen_like_existing_provider_models():
+    team = _team()
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        team.name = "Milan"
+
+
 # ==== PUBLIC API (matrix item 37) ====
 
 def test_public_api_exports_only_intended_names():
@@ -297,10 +406,12 @@ def test_public_api_exports_only_intended_names():
         "ApiFootballLeague",
         "ApiFootballMalformedResponseError",
         "ApiFootballProviderError",
+        "ApiFootballTeam",
         "HttpRequestIdentity",
         "LeagueFetchResult",
         "LogicalRequestIdentity",
         "RawContent",
+        "TeamsFetchResult",
         "RawObservation",
     }
     assert set(api_football.__all__) == expected
