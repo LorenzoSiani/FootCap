@@ -12,11 +12,14 @@ from .identity import (
     ProviderIdentityMapping,
     UnresolvedProviderIdentityError,
 )
+from .season import Season, SeasonInputError
 
 __all__ = [
     "IdentityInputError",
     "IdentityResolver",
     "ProviderEntityRef",
     "ProviderIdentityMapping",
+    "Season",
+    "SeasonInputError",
     "UnresolvedProviderIdentityError",
 ]
