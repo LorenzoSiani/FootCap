@@ -1,3 +1,7 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["tests"]
+markers = [
+    "db: requires a running local PostgreSQL test database (see compose.yaml, .env.example); excluded by default, run explicitly with `pytest -m db`",
+]
+addopts = "-m \"not db\""
