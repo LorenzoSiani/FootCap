@@ -19,11 +19,13 @@ from .models import (
     PROVIDER_NAME,
     ApiFootballConfig,
     ApiFootballError,
+    ApiFootballFixture,
     ApiFootballHttpError,
     ApiFootballLeague,
     ApiFootballMalformedResponseError,
     ApiFootballProviderError,
     ApiFootballTeam,
+    FixturesFetchResult,
     HttpRequestIdentity,
     LeagueFetchResult,
     LogicalRequestIdentity,
@@ -34,6 +36,7 @@ from .models import (
 
 _LEAGUES_ENDPOINT = "/leagues"
 _TEAMS_ENDPOINT = "/teams"
+_FIXTURES_ENDPOINT = "/fixtures"
 _ENVELOPE_KEYS = ("get", "parameters", "errors", "results", "paging", "response")
 _TEAM_KEYS = ("id", "name", "code", "country", "founded", "national", "logo")
 
@@ -175,6 +178,157 @@ def _parse_teams(response_list: list, observation: RawObservation) -> tuple[ApiF
         seen_ids.add(team.provider_team_id)
         teams.append(team)
     return tuple(teams)
+
+
+def _require_dict(container: dict, key: str, observation: RawObservation, path: str) -> dict:
+    if key not in container:
+        raise ApiFootballMalformedResponseError(f"{path} is missing", observation=observation)
+    value = container[key]
+    if not isinstance(value, dict):
+        raise ApiFootballMalformedResponseError(f"{path} must be an object, got {type(value)!r}", observation=observation)
+    return value
+
+
+def _require_key(container: dict, key: str, observation: RawObservation, path: str) -> object:
+    if key not in container:
+        raise ApiFootballMalformedResponseError(f"{path} is missing", observation=observation)
+    return container[key]
+
+
+def _parse_kickoff_at(fixture_obj: dict, observation: RawObservation) -> tuple[datetime, str]:
+    """Derives kickoff_at from fixture.timestamp (Unix seconds, the
+    canonical source) and cross-validates it against fixture.date
+    (ISO 8601 with required UTC offset) by comparing instants, not
+    text -- two representations of the same instant with different
+    offsets are accepted; a genuine disagreement is malformed data,
+    never silently resolved by preferring one field over the other."""
+    timestamp = _require_key(fixture_obj, "timestamp", observation, "fixture.timestamp")
+    if isinstance(timestamp, bool) or not isinstance(timestamp, int):
+        raise ApiFootballMalformedResponseError(
+            f"fixture.timestamp must be an int, got {type(timestamp)!r}", observation=observation
+        )
+    # A structurally valid int can still be outside the platform/Python
+    # datetime representable range. datetime.fromtimestamp() can raise
+    # OverflowError, OSError, or ValueError depending on platform and
+    # magnitude (observed: OSError for moderately out-of-range values,
+    # OverflowError for extreme ones) -- an HTTP response already exists
+    # here, so none of these may escape uncaught.
+    try:
+        kickoff_from_timestamp = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ApiFootballMalformedResponseError(
+            f"fixture.timestamp is invalid or outside the supported datetime range: {timestamp!r}",
+            observation=observation,
+        ) from exc
+
+    date_value = _require_key(fixture_obj, "date", observation, "fixture.date")
+    if not isinstance(date_value, str) or not date_value.strip():
+        raise ApiFootballMalformedResponseError("fixture.date must be a non-blank string", observation=observation)
+    try:
+        parsed_date = datetime.fromisoformat(date_value)
+    except ValueError as exc:
+        raise ApiFootballMalformedResponseError(
+            f"fixture.date is not valid ISO 8601: {date_value!r}", observation=observation
+        ) from exc
+    if parsed_date.tzinfo is None or parsed_date.utcoffset() is None:
+        raise ApiFootballMalformedResponseError(
+            "fixture.date must contain UTC offset information", observation=observation
+        )
+    # An offset-aware datetime near datetime.min/max can parse
+    # successfully but overflow while shifting to UTC (e.g.
+    # 9999-12-31T23:59:59-14:00 normalizes past year 9999).
+    try:
+        kickoff_from_date = parsed_date.astimezone(timezone.utc)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ApiFootballMalformedResponseError(
+            f"fixture.date is outside the supported datetime range when normalized to UTC: {date_value!r}",
+            observation=observation,
+        ) from exc
+
+    if kickoff_from_date != kickoff_from_timestamp:
+        raise ApiFootballMalformedResponseError(
+            "fixture.timestamp and fixture.date do not represent the same instant", observation=observation
+        )
+
+    timezone_value = _require_key(fixture_obj, "timezone", observation, "fixture.timezone")
+    if not isinstance(timezone_value, str) or not timezone_value.strip():
+        raise ApiFootballMalformedResponseError("fixture.timezone must be a non-blank string", observation=observation)
+
+    return kickoff_from_timestamp, timezone_value
+
+
+def _parse_fixture(
+    entry: object, requested_league_id: int, requested_season: int, observation: RawObservation
+) -> ApiFootballFixture:
+    if not isinstance(entry, dict):
+        raise ApiFootballMalformedResponseError("response entry is not an object", observation=observation)
+
+    fixture_obj = _require_dict(entry, "fixture", observation, "fixture")
+    league_obj = _require_dict(entry, "league", observation, "league")
+    teams_obj = _require_dict(entry, "teams", observation, "teams")
+    goals_obj = _require_dict(entry, "goals", observation, "goals")
+
+    kickoff_at, provider_timezone = _parse_kickoff_at(fixture_obj, observation)
+
+    status_obj = _require_dict(fixture_obj, "status", observation, "fixture.status")
+    home_obj = _require_dict(teams_obj, "home", observation, "teams.home")
+    away_obj = _require_dict(teams_obj, "away", observation, "teams.away")
+
+    try:
+        fixture = ApiFootballFixture(
+            provider_fixture_id=_require_key(fixture_obj, "id", observation, "fixture.id"),
+            provider_league_id=_require_key(league_obj, "id", observation, "league.id"),
+            season=_require_key(league_obj, "season", observation, "league.season"),
+            round=_require_key(league_obj, "round", observation, "league.round"),
+            kickoff_at=kickoff_at,
+            provider_timezone=provider_timezone,
+            provider_status_short=_require_key(status_obj, "short", observation, "fixture.status.short"),
+            provider_status_long=_require_key(status_obj, "long", observation, "fixture.status.long"),
+            provider_status_elapsed=_require_key(status_obj, "elapsed", observation, "fixture.status.elapsed"),
+            home_provider_team_id=_require_key(home_obj, "id", observation, "teams.home.id"),
+            away_provider_team_id=_require_key(away_obj, "id", observation, "teams.away.id"),
+            home_goals=_require_key(goals_obj, "home", observation, "goals.home"),
+            away_goals=_require_key(goals_obj, "away", observation, "goals.away"),
+        )
+    except ApiFootballMalformedResponseError as exc:
+        raise ApiFootballMalformedResponseError(str(exc), observation=observation) from exc
+
+    # Request-context consistency: ApiFootballFixture itself does not
+    # know the original request (see models.py), so this comparison
+    # lives here, after the DTO's own field constraints already passed.
+    if fixture.provider_league_id != requested_league_id:
+        raise ApiFootballMalformedResponseError(
+            f"league.id {fixture.provider_league_id} does not match requested league_id {requested_league_id}",
+            observation=observation,
+        )
+    if fixture.season != requested_season:
+        raise ApiFootballMalformedResponseError(
+            f"league.season {fixture.season} does not match requested season {requested_season}",
+            observation=observation,
+        )
+
+    return fixture
+
+
+def _parse_fixtures(
+    response_list: list, requested_league_id: int, requested_season: int, observation: RawObservation
+) -> tuple[ApiFootballFixture, ...]:
+    """Parses every entry, preserving provider order exactly. A set is
+    used only as an auxiliary O(1) membership check for duplicate
+    detection -- it never determines output order or content, so it
+    cannot silently reorder or drop anything; the first duplicate found
+    raises immediately with the observation preserved."""
+    fixtures: list[ApiFootballFixture] = []
+    seen_ids: set[int] = set()
+    for entry in response_list:
+        fixture = _parse_fixture(entry, requested_league_id, requested_season, observation)
+        if fixture.provider_fixture_id in seen_ids:
+            raise ApiFootballMalformedResponseError(
+                f"duplicate fixture id {fixture.provider_fixture_id} in response", observation=observation
+            )
+        seen_ids.add(fixture.provider_fixture_id)
+        fixtures.append(fixture)
+    return tuple(fixtures)
 
 
 class ApiFootballClient:
@@ -343,3 +497,72 @@ class ApiFootballClient:
 
         teams = _parse_teams(payload["response"], observation)
         return TeamsFetchResult(observation=observation, teams=teams)
+
+    def get_fixtures(self, league_id: int, season: int, job_run_id: str) -> FixturesFetchResult:
+        """GET /fixtures?league=<league_id>&season=<season>. Returns a
+        FixturesFetchResult whose `observation` is always populated for
+        any successfully received HTTP response (ADR-011); `fixtures` is
+        an empty tuple only for a valid, empty provider response list.
+        This method does not implement pagination traversal: if the
+        provider reports more than one page, it raises rather than
+        silently returning page 1 as though it were the complete
+        season."""
+        league_id = _validate_league_id(league_id)
+        season = _validate_season(season)
+        job_run_id = _validate_job_run_id(job_run_id)
+
+        logical_request = LogicalRequestIdentity(
+            provider=PROVIDER_NAME,
+            endpoint=_FIXTURES_ENDPOINT,
+            parameters=(("league", str(league_id)), ("season", str(season))),
+        )
+        http_request = HttpRequestIdentity(logical_request=logical_request)
+        request_parameters = {"league": str(league_id), "season": str(season)}
+
+        requested_at = _utc_now()
+        try:
+            response = self._client.get(_FIXTURES_ENDPOINT, params=request_parameters)
+        except httpx.HTTPError as exc:
+            raise ApiFootballError(f"transport failure calling {_FIXTURES_ENDPOINT}") from exc
+
+        raw_body = response.content
+        received_at = _utc_now()
+        raw_content = RawContent(body=raw_body)
+
+        observation = RawObservation(
+            provider=PROVIDER_NAME,
+            endpoint=_FIXTURES_ENDPOINT,
+            logical_request=logical_request,
+            http_request=http_request,
+            request_parameters=request_parameters,
+            requested_at=requested_at,
+            received_at=received_at,
+            http_status=response.status_code,
+            job_run_id=job_run_id,
+            raw_content=raw_content,
+        )
+
+        if not response.is_success:
+            raise ApiFootballHttpError(response.status_code, observation=observation)
+
+        try:
+            payload = json.loads(raw_body)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            # json.loads(bytes) can fail two distinct ways: the bytes
+            # don't decode as text at all (UnicodeDecodeError, raised
+            # before any JSON parsing is attempted) or they decode but
+            # aren't valid JSON (json.JSONDecodeError). Neither is a
+            # subclass of the other -- both are ValueError siblings --
+            # so both must be caught explicitly or a malformed-encoding
+            # response would escape without the RawObservation attached.
+            raise ApiFootballMalformedResponseError("response body is not valid JSON", observation=observation) from exc
+
+        payload = _validate_envelope_shape(payload, observation)
+
+        if len(payload["errors"]) > 0:
+            raise ApiFootballProviderError(payload["errors"], observation=observation)
+
+        _validate_single_page(payload, observation)
+
+        fixtures = _parse_fixtures(payload["response"], league_id, season, observation)
+        return FixturesFetchResult(observation=observation, fixtures=fixtures)

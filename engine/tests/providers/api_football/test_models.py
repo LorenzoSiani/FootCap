@@ -23,9 +23,11 @@ import footcap_engine.providers.api_football as api_football
 from footcap_engine.providers.api_football import (
     ApiFootballConfig,
     ApiFootballError,
+    ApiFootballFixture,
     ApiFootballLeague,
     ApiFootballMalformedResponseError,
     ApiFootballTeam,
+    FixturesFetchResult,
     HttpRequestIdentity,
     LeagueFetchResult,
     LogicalRequestIdentity,
@@ -395,6 +397,175 @@ def test_team_dataclass_is_frozen_like_existing_provider_models():
         team.name = "Milan"
 
 
+# ==== FIXTURE DTO (0.5.4B) -- model-level invariants only. Request-context
+# invariants (league.id/season vs requested league_id/season) are NOT
+# tested here: ApiFootballFixture does not know the request, per the
+# MODEL-LEVEL VS PARSER-LEVEL split -- those live in test_client.py. ====
+
+KICKOFF_AT = datetime(2026, 8, 13, 18, 0, 0, tzinfo=timezone.utc)
+
+
+def _fixture(**overrides) -> ApiFootballFixture:
+    fields = dict(
+        provider_fixture_id=555,
+        provider_league_id=135,
+        season=2023,
+        round="Regular Season - 1",
+        kickoff_at=KICKOFF_AT,
+        provider_timezone="UTC",
+        provider_status_short="NS",
+        provider_status_long="Not Started",
+        provider_status_elapsed=None,
+        home_provider_team_id=505,
+        away_provider_team_id=506,
+        home_goals=None,
+        away_goals=None,
+    )
+    fields.update(overrides)
+    return ApiFootballFixture(**fields)
+
+
+def test_fixture_core_fields_retained():
+    fixture = _fixture()
+    assert fixture.provider_fixture_id == 555
+    assert fixture.provider_league_id == 135
+    assert fixture.season == 2023
+    assert fixture.round == "Regular Season - 1"
+    assert fixture.home_provider_team_id == 505
+    assert fixture.away_provider_team_id == 506
+
+
+def test_fixture_kickoff_at_aware_non_utc_normalized():
+    non_utc = KICKOFF_AT.astimezone(timezone(timedelta(hours=2)))
+    fixture = _fixture(kickoff_at=non_utc)
+    assert fixture.kickoff_at == KICKOFF_AT
+    assert fixture.kickoff_at.tzinfo == timezone.utc
+
+
+def test_fixture_naive_kickoff_at_rejected():
+    with pytest.raises(ApiFootballMalformedResponseError):
+        _fixture(kickoff_at=datetime(2026, 8, 13, 18, 0, 0))
+
+
+def test_fixture_kickoff_at_utc_normalization_overflow_rejected():
+    # 0.5.4D: an aware datetime near datetime.max normalizes past year
+    # 9999 when shifted to UTC, overflowing datetime's representable
+    # range. Direct construction has no RawObservation to attach --
+    # confirmed none is fabricated.
+    extreme = datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone(timedelta(hours=-14)))
+    with pytest.raises(ApiFootballMalformedResponseError) as excinfo:
+        _fixture(kickoff_at=extreme)
+    assert excinfo.value.observation is None
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"provider_fixture_id": True},
+        {"provider_fixture_id": 0},
+        {"provider_fixture_id": -1},
+        {"provider_league_id": True},
+        {"provider_league_id": 0},
+        {"season": True},
+        {"season": 999},
+        {"season": 10000},
+        {"round": ""},
+        {"round": "   "},
+        {"round": 123},
+        {"provider_timezone": ""},
+        {"provider_status_short": ""},
+        {"provider_status_long": ""},
+        {"provider_status_elapsed": True},
+        {"provider_status_elapsed": -1},
+        {"home_provider_team_id": True},
+        {"home_provider_team_id": 0},
+        {"home_provider_team_id": -505},
+        {"away_provider_team_id": True},
+        {"away_provider_team_id": 0},
+        {"home_goals": True},
+        {"home_goals": -1},
+        {"away_goals": True},
+        {"away_goals": -1},
+    ],
+)
+def test_fixture_invalid_values_rejected(overrides):
+    with pytest.raises(ApiFootballMalformedResponseError):
+        _fixture(**overrides)
+
+
+def test_fixture_round_none_accepted():
+    assert _fixture(round=None).round is None
+
+
+def test_fixture_status_elapsed_zero_and_none_accepted():
+    assert _fixture(provider_status_elapsed=None).provider_status_elapsed is None
+    assert _fixture(provider_status_elapsed=0).provider_status_elapsed == 0
+
+
+def test_fixture_equal_home_away_team_ids_rejected():
+    with pytest.raises(ApiFootballMalformedResponseError):
+        _fixture(home_provider_team_id=505, away_provider_team_id=505)
+
+
+@pytest.mark.parametrize(
+    "home_goals,away_goals",
+    [(None, None), (2, 1), (None, 3), (4, None)],
+)
+def test_fixture_asymmetric_goal_nullability_accepted(home_goals, away_goals):
+    fixture = _fixture(home_goals=home_goals, away_goals=away_goals)
+    assert fixture.home_goals == home_goals
+    assert fixture.away_goals == away_goals
+
+
+def test_fixture_dataclass_is_frozen_like_existing_provider_models():
+    fixture = _fixture()
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        fixture.provider_status_short = "FT"
+
+
+# ==== FixturesFetchResult (0.5.4B) ====
+
+def test_fixtures_fetch_result_accepts_empty_tuple():
+    result = FixturesFetchResult(observation=_observation(), fixtures=())
+    assert result.fixtures == ()
+
+
+def test_fixtures_fetch_result_accepts_unique_provider_fixture_ids():
+    result = FixturesFetchResult(
+        observation=_observation(),
+        fixtures=(_fixture(provider_fixture_id=555), _fixture(provider_fixture_id=556)),
+    )
+    assert [fixture.provider_fixture_id for fixture in result.fixtures] == [555, 556]
+
+
+def test_fixtures_fetch_result_rejects_duplicate_provider_fixture_ids():
+    with pytest.raises(ApiFootballError):
+        FixturesFetchResult(
+            observation=_observation(),
+            fixtures=(_fixture(provider_fixture_id=555), _fixture(provider_fixture_id=555)),
+        )
+
+
+def test_fixtures_fetch_result_preserves_original_tuple_order():
+    ordered = (
+        _fixture(provider_fixture_id=557),
+        _fixture(provider_fixture_id=555),
+        _fixture(provider_fixture_id=556),
+    )
+    result = FixturesFetchResult(observation=_observation(), fixtures=ordered)
+    assert [fixture.provider_fixture_id for fixture in result.fixtures] == [557, 555, 556]
+
+
+def test_fixtures_fetch_result_rejects_non_tuple_collection():
+    with pytest.raises(ApiFootballError):
+        FixturesFetchResult(observation=_observation(), fixtures=[_fixture()])
+
+
+def test_fixtures_fetch_result_rejects_non_fixture_item():
+    with pytest.raises(ApiFootballError):
+        FixturesFetchResult(observation=_observation(), fixtures=("not a fixture",))
+
+
 # ==== PUBLIC API (matrix item 37) ====
 
 def test_public_api_exports_only_intended_names():
@@ -402,11 +573,13 @@ def test_public_api_exports_only_intended_names():
         "ApiFootballClient",
         "ApiFootballConfig",
         "ApiFootballError",
+        "ApiFootballFixture",
         "ApiFootballHttpError",
         "ApiFootballLeague",
         "ApiFootballMalformedResponseError",
         "ApiFootballProviderError",
         "ApiFootballTeam",
+        "FixturesFetchResult",
         "HttpRequestIdentity",
         "LeagueFetchResult",
         "LogicalRequestIdentity",

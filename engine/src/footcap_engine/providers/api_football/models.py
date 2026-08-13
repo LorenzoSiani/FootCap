@@ -371,6 +371,160 @@ class ApiFootballTeam:
 
 
 @dataclass(frozen=True)
+class ApiFootballFixture:
+    """Provider-shaped Fixture DTO. Deliberately NOT a FootCap normalized
+    Match -- it retains only provider identifiers/facts, and ADR-011
+    identity resolution into FootCap match/competition/team identity is
+    explicitly future work, not implemented here. venue, referee,
+    periods, winner, team name/logo, and score breakdown are
+    intentionally not modeled; their exact bytes remain recoverable
+    from RawContent regardless of what this DTO parses.
+
+    Request-context invariants (fixture.league.id/season matching the
+    requested league_id/season) are NOT enforced here -- this DTO does
+    not know the original request. Those belong to parsing/client logic
+    (see client.py's _parse_fixture)."""
+
+    provider_fixture_id: int
+    provider_league_id: int
+    season: int
+    round: str | None
+    kickoff_at: datetime
+    provider_timezone: str
+    provider_status_short: str
+    provider_status_long: str
+    provider_status_elapsed: int | None
+    home_provider_team_id: int
+    away_provider_team_id: int
+    home_goals: int | None
+    away_goals: int | None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.provider_fixture_id, bool) or not isinstance(self.provider_fixture_id, int):
+            raise ApiFootballMalformedResponseError(
+                f"fixture.id must be an int, got {type(self.provider_fixture_id)!r}"
+            )
+        if self.provider_fixture_id <= 0:
+            raise ApiFootballMalformedResponseError("fixture.id must be a positive integer")
+
+        if isinstance(self.provider_league_id, bool) or not isinstance(self.provider_league_id, int):
+            raise ApiFootballMalformedResponseError(
+                f"league.id must be an int, got {type(self.provider_league_id)!r}"
+            )
+        if self.provider_league_id <= 0:
+            raise ApiFootballMalformedResponseError("league.id must be a positive integer")
+
+        if isinstance(self.season, bool) or not isinstance(self.season, int):
+            raise ApiFootballMalformedResponseError(f"league.season must be an int, got {type(self.season)!r}")
+        if not (1000 <= self.season <= 9999):
+            raise ApiFootballMalformedResponseError("league.season must be a four-digit year (1000-9999)")
+
+        if self.round is not None and (not isinstance(self.round, str) or not self.round.strip()):
+            raise ApiFootballMalformedResponseError("league.round must be null or a non-blank string")
+
+        if not isinstance(self.kickoff_at, datetime):
+            raise ApiFootballMalformedResponseError(
+                f"kickoff_at must be a datetime.datetime, got {type(self.kickoff_at)!r}"
+            )
+        if self.kickoff_at.tzinfo is None or self.kickoff_at.utcoffset() is None:
+            raise ApiFootballMalformedResponseError(
+                "kickoff_at must be a timezone-aware datetime; naive datetimes are rejected"
+            )
+        # An aware datetime near datetime.min/max can still overflow
+        # while being normalized to UTC. No RawObservation exists for
+        # direct model construction, so none is attached here -- this
+        # mirrors every other ApiFootballMalformedResponseError already
+        # raised in this constructor.
+        try:
+            kickoff_at = self.kickoff_at.astimezone(timezone.utc)
+        except (OverflowError, OSError, ValueError) as exc:
+            raise ApiFootballMalformedResponseError(
+                "kickoff_at is outside the supported datetime range when normalized to UTC"
+            ) from exc
+
+        if not isinstance(self.provider_timezone, str) or not self.provider_timezone.strip():
+            raise ApiFootballMalformedResponseError(
+                f"fixture.timezone must be a non-blank string, got {self.provider_timezone!r}"
+            )
+
+        if not isinstance(self.provider_status_short, str) or not self.provider_status_short.strip():
+            raise ApiFootballMalformedResponseError(
+                f"fixture.status.short must be a non-blank string, got {self.provider_status_short!r}"
+            )
+        if not isinstance(self.provider_status_long, str) or not self.provider_status_long.strip():
+            raise ApiFootballMalformedResponseError(
+                f"fixture.status.long must be a non-blank string, got {self.provider_status_long!r}"
+            )
+
+        if self.provider_status_elapsed is not None:
+            if isinstance(self.provider_status_elapsed, bool) or not isinstance(self.provider_status_elapsed, int):
+                raise ApiFootballMalformedResponseError(
+                    f"fixture.status.elapsed must be null or an int, got {type(self.provider_status_elapsed)!r}"
+                )
+            if self.provider_status_elapsed < 0:
+                raise ApiFootballMalformedResponseError("fixture.status.elapsed must be >= 0")
+
+        if isinstance(self.home_provider_team_id, bool) or not isinstance(self.home_provider_team_id, int):
+            raise ApiFootballMalformedResponseError(
+                f"teams.home.id must be an int, got {type(self.home_provider_team_id)!r}"
+            )
+        if self.home_provider_team_id <= 0:
+            raise ApiFootballMalformedResponseError("teams.home.id must be a positive integer")
+
+        if isinstance(self.away_provider_team_id, bool) or not isinstance(self.away_provider_team_id, int):
+            raise ApiFootballMalformedResponseError(
+                f"teams.away.id must be an int, got {type(self.away_provider_team_id)!r}"
+            )
+        if self.away_provider_team_id <= 0:
+            raise ApiFootballMalformedResponseError("teams.away.id must be a positive integer")
+
+        if self.home_provider_team_id == self.away_provider_team_id:
+            raise ApiFootballMalformedResponseError("teams.home.id and teams.away.id must not be equal")
+
+        for field_name, value in (("goals.home", self.home_goals), ("goals.away", self.away_goals)):
+            if value is not None:
+                if isinstance(value, bool) or not isinstance(value, int):
+                    raise ApiFootballMalformedResponseError(
+                        f"{field_name} must be null or an int, got {type(value)!r}"
+                    )
+                if value < 0:
+                    raise ApiFootballMalformedResponseError(f"{field_name} must be >= 0")
+
+        object.__setattr__(self, "kickoff_at", kickoff_at)
+
+
+@dataclass(frozen=True)
+class FixturesFetchResult:
+    """Result of one get_fixtures() call. The raw observation always
+    remains available for a successful HTTP response, even when the
+    provider's response list is empty (ADR-011: raw provenance is never
+    discarded). fixtures preserves exact provider response order."""
+
+    observation: RawObservation
+    fixtures: tuple[ApiFootballFixture, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.observation, RawObservation):
+            raise ApiFootballError("observation must be a RawObservation")
+        if not isinstance(self.fixtures, tuple):
+            raise ApiFootballError(f"fixtures must be a tuple, got {type(self.fixtures)!r}")
+        # Defense at both boundaries is intentional, mirroring
+        # TeamsFetchResult: _parse_fixtures() in client.py already
+        # rejects duplicates found in a live provider response, but this
+        # model must not be directly constructible with a contradictory
+        # duplicate-identity state either.
+        seen_ids: set[int] = set()
+        for fixture in self.fixtures:
+            if not isinstance(fixture, ApiFootballFixture):
+                raise ApiFootballError("fixtures must contain only ApiFootballFixture instances")
+            if fixture.provider_fixture_id in seen_ids:
+                raise ApiFootballError(
+                    f"fixtures must not contain duplicate provider_fixture_id values: {fixture.provider_fixture_id}"
+                )
+            seen_ids.add(fixture.provider_fixture_id)
+
+
+@dataclass(frozen=True)
 class TeamsFetchResult:
     """Result of one get_teams() call. The raw observation always
     remains available for a successful HTTP response, even when the
