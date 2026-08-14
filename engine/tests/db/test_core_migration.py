@@ -19,9 +19,37 @@ against what PostgreSQL actually reports.
 
 No repository, storage adapter, or application persistence code is
 introduced here.
+
+Task 0.5.10F adds two coverage-gap closures identified by the 0.5.10E.1
+adversarial review: a direct Team duplicate-primary-key behavioral test,
+and an entity + first provider mapping atomicity/orphan-prevention test
+(ADR-015 decisions 8/10; ADR-013 decision 7). The atomicity test needs a
+transaction that genuinely commits (to prove the success case is durable)
+and independent connections to verify state from outside that
+transaction -- migrated_db_connection's own always-rollback design is
+deliberately unsuitable for that, so those two tests instead reuse
+conftest.py's already-safety-gated `_open_connection` helper directly
+against `test_database_url`, and clean up (by exact known key, never
+TRUNCATE/DROP) whatever they durably commit.
 """
-import psycopg
+import uuid
+
 import pytest
+
+try:
+    import psycopg
+except ImportError:
+    # Collection-time safety: pytest imports every test module during
+    # collection, before marker-based deselection (`-m "not db"`) excludes
+    # anything -- an unconditional `import psycopg` here would break the
+    # ordinary, non-DB pytest run whenever psycopg is not installed, the
+    # same hazard conftest.py's own lazy-import discipline exists to
+    # avoid. psycopg is only ever dereferenced inside a running db-marked
+    # test, by which point it must already be installed for the test to
+    # do anything useful at all.
+    psycopg = None
+
+from db.conftest import _open_connection
 
 pytestmark = pytest.mark.db
 
@@ -301,6 +329,19 @@ def test_teams_nonblank_checks_rejected(migrated_db_connection, team_id, name, c
             )
 
 
+def test_teams_duplicate_id_rejected(migrated_db_connection):
+    # Task 0.5.10F Fix 1: closes the coverage gap the 0.5.10E.1 review
+    # found -- Competition/Season/mapping each already had a dedicated
+    # duplicate-PK test; Team did not. Both rows use otherwise-valid,
+    # nonblank metadata so the only constraint either INSERT can violate
+    # is the primary key itself.
+    with migrated_db_connection.cursor() as cur:
+        cur.execute("INSERT INTO teams (team_id, name) VALUES (%s, %s)", ("dup-team", "First"))
+        with pytest.raises(psycopg.errors.UniqueViolation) as excinfo:
+            cur.execute("INSERT INTO teams (team_id, name) VALUES (%s, %s)", ("dup-team", "Second"))
+    assert excinfo.value.diag.constraint_name == "teams_pkey"
+
+
 def test_season_insert_succeeds_for_existing_competition(migrated_db_connection):
     with migrated_db_connection.cursor() as cur:
         cur.execute("INSERT INTO competitions (competition_id, name) VALUES (%s, %s)", ("comp-1", "Comp One"))
@@ -438,3 +479,145 @@ def test_mapping_nonblank_checks_rejected(migrated_db_connection, provider, enti
                 "(provider, entity_type, provider_entity_id, footcap_entity_id) VALUES (%s, %s, %s, %s)",
                 (provider, entity_type, provider_entity_id, footcap_entity_id),
             )
+
+
+# ==== Task 0.5.10F Fix 2/3: entity + first mapping atomicity ====
+#
+# ADR-013 decision 7 / ADR-015 decisions 8/10: creating a Team and its
+# first ProviderIdentityMapping must behave as one logical atomic
+# operation -- a successful operation exposes both rows, or neither.
+# These two tests deliberately use real, independently-committing
+# connections (via conftest.py's `_open_connection`, always derived from
+# the already-safety-gated `test_database_url` fixture -- never a raw
+# env-var read) rather than migrated_db_connection, because proving
+# "durable success" and "durable non-existence after rollback" both
+# require verifying state from outside the transaction under test, which
+# migrated_db_connection's always-rollback design cannot do. Both tests
+# depend on `migrated_database` directly (not merely `migrated_db_connection`)
+# since neither uses that fixture's connection.
+
+def test_team_mapping_atomic_success_is_durable(migrated_database, test_database_url):
+    team_id = f"t-atomic-{uuid.uuid4().hex}"
+    provider_entity_id = uuid.uuid4().hex
+
+    connection = _open_connection(test_database_url)
+    try:
+        with connection.cursor() as cur:
+            cur.execute("INSERT INTO teams (team_id, name) VALUES (%s, %s)", (team_id, "Atomic Team"))
+            cur.execute(
+                "INSERT INTO provider_identity_mappings "
+                "(provider, entity_type, provider_entity_id, footcap_entity_id) VALUES (%s, %s, %s, %s)",
+                ("api-football", "team", provider_entity_id, team_id),
+            )
+        connection.commit()
+
+        # Verify durability from a fresh, independent connection -- not
+        # merely that the two INSERTs succeeded within their own
+        # transaction, which every uncommitted transaction trivially sees
+        # regardless of whether it is ever actually committed.
+        verify_connection = _open_connection(test_database_url)
+        try:
+            with verify_connection.cursor() as cur:
+                cur.execute("SELECT 1 FROM teams WHERE team_id = %s", (team_id,))
+                assert cur.fetchone() is not None, "committed Team row is not durably visible"
+
+                cur.execute(
+                    "SELECT footcap_entity_id FROM provider_identity_mappings "
+                    "WHERE provider = %s AND entity_type = %s AND provider_entity_id = %s",
+                    ("api-football", "team", provider_entity_id),
+                )
+                row = cur.fetchone()
+                assert row is not None, "committed mapping row is not durably visible"
+                assert row[0] == team_id
+        finally:
+            verify_connection.close()
+    finally:
+        # Cleanup: remove only the exact rows this test committed. Never
+        # TRUNCATE or reset the schema -- other db-marked tests in this
+        # session share the same migrated database.
+        with connection.cursor() as cur:
+            cur.execute(
+                "DELETE FROM provider_identity_mappings "
+                "WHERE provider = %s AND entity_type = %s AND provider_entity_id = %s",
+                ("api-football", "team", provider_entity_id),
+            )
+            cur.execute("DELETE FROM teams WHERE team_id = %s", (team_id,))
+        connection.commit()
+        connection.close()
+
+
+def test_team_mapping_failure_leaves_no_orphan_team(migrated_database, test_database_url):
+    occupied_provider_entity_id = uuid.uuid4().hex
+    new_team_id = f"t-orphan-{uuid.uuid4().hex}"
+
+    # Step 1: pre-establish and durably commit the mapping key the main
+    # transaction's mapping insert will collide against -- decoupled from
+    # the transaction under test, mirroring a genuine "another bootstrap
+    # run already holds this provider reference" scenario rather than a
+    # same-transaction self-conflict.
+    setup_connection = _open_connection(test_database_url)
+    try:
+        with setup_connection.cursor() as cur:
+            cur.execute(
+                "INSERT INTO provider_identity_mappings "
+                "(provider, entity_type, provider_entity_id, footcap_entity_id) VALUES (%s, %s, %s, %s)",
+                ("api-football", "team", occupied_provider_entity_id, "team-already-mapped"),
+            )
+        setup_connection.commit()
+    finally:
+        setup_connection.close()
+
+    try:
+        # Steps 2-5: a fresh transaction inserts a brand-new Team (this
+        # INSERT alone would succeed), then attempts a mapping insert
+        # against the already-occupied provider reference (this INSERT
+        # must fail on the mapping's own primary key, not on any other
+        # constraint).
+        main_connection = _open_connection(test_database_url)
+        try:
+            with main_connection.cursor() as cur:
+                cur.execute("INSERT INTO teams (team_id, name) VALUES (%s, %s)", (new_team_id, "Orphan Candidate"))
+
+                with pytest.raises(psycopg.errors.UniqueViolation) as excinfo:
+                    cur.execute(
+                        "INSERT INTO provider_identity_mappings "
+                        "(provider, entity_type, provider_entity_id, footcap_entity_id) VALUES (%s, %s, %s, %s)",
+                        ("api-football", "team", occupied_provider_entity_id, new_team_id),
+                    )
+                assert excinfo.value.diag.constraint_name == "provider_identity_mappings_pkey"
+
+            # Step 6: roll back the WHOLE transaction -- this is what
+            # must discard the otherwise-successful Team insert alongside
+            # the failed mapping insert.
+            main_connection.rollback()
+        finally:
+            main_connection.close()
+
+        # Step 7 (the core orphan-prevention assertion): from a separate,
+        # fresh connection -- never merely trusting that "the mapping
+        # insert failed" implies the Team was also discarded -- prove the
+        # candidate Team never became durable.
+        verify_connection = _open_connection(test_database_url)
+        try:
+            with verify_connection.cursor() as cur:
+                cur.execute("SELECT 1 FROM teams WHERE team_id = %s", (new_team_id,))
+                assert cur.fetchone() is None, (
+                    "orphan Team row survived a rolled-back transaction whose mapping insert failed"
+                )
+        finally:
+            verify_connection.close()
+    finally:
+        # Cleanup: remove only the durably-committed setup row. The
+        # candidate Team row was never committed, so there is nothing to
+        # delete for it -- its absence is exactly what this test proves.
+        cleanup_connection = _open_connection(test_database_url)
+        try:
+            with cleanup_connection.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM provider_identity_mappings "
+                    "WHERE provider = %s AND entity_type = %s AND provider_entity_id = %s",
+                    ("api-football", "team", occupied_provider_entity_id),
+                )
+            cleanup_connection.commit()
+        finally:
+            cleanup_connection.close()
