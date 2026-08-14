@@ -1,10 +1,13 @@
 """
-Local PostgreSQL test-infrastructure fixtures (Task 0.5.10D; ADR-015).
+Local PostgreSQL test-infrastructure fixtures (Tasks 0.5.10D/0.5.10E;
+ADR-015).
 
-This module establishes connectivity only. It does not apply the core
-migration (supabase/migrations/20260813224850_core_domain_persistence.sql),
-create schema, or run any destructive SQL -- migration application belongs
-to a later task (0.5.10E).
+test_database_url and db_connection establish connectivity only -- they
+never apply the core migration, create schema, or run any destructive
+SQL; db_connection remains what test_connection.py uses. migrated_database
+and migrated_db_connection (added in Task 0.5.10E, see below) are the only
+fixtures in this module that mutate schema, and only ever against a URL
+that has already passed the safety guard.
 
 FOOTCAP_TEST_DATABASE_URL must be set explicitly; it is never guessed or
 defaulted, so a DB test explicitly requested via `pytest -m db` fails
@@ -27,16 +30,30 @@ validator never hands the raw URL to psycopg merely to discover its
 target; safety is decided purely from urlsplit's own structural fields
 before any connection is attempted.
 
-psycopg is imported lazily, inside db_connection, rather than at module
-level. pytest loads every conftest.py under testpaths unconditionally
-during collection -- before marker-based deselection (`-m "not db"`)
-excludes anything -- so a top-level `import psycopg` here would break
-every ordinary, non-DB pytest run whenever psycopg is not installed,
-defeating the point of DB tests being opt-in.
+psycopg is imported lazily, inside db_connection (and the migration
+fixtures below), rather than at module level. pytest loads every
+conftest.py under testpaths unconditionally during collection -- before
+marker-based deselection (`-m "not db"`) excludes anything -- so a
+top-level `import psycopg` here would break every ordinary, non-DB pytest
+run whenever psycopg is not installed, defeating the point of DB tests
+being opt-in.
+
+migrated_database / migrated_db_connection (Task 0.5.10E) add the first
+DESTRUCTIVE operation this package performs: resetting the public schema
+and applying the real core migration
+(supabase/migrations/20260813224850_core_domain_persistence.sql) so its
+runtime structure can actually be verified against PostgreSQL, not merely
+read as text. This is safe here ONLY because both fixtures depend on
+test_database_url, which has already run the full safety guard above
+before either fixture's body executes -- neither fixture re-validates the
+URL itself, and neither is ever called with a raw, unvalidated URL. The
+migration file itself is read and executed verbatim; its SQL is never
+duplicated or re-derived in Python.
 """
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
@@ -46,6 +63,16 @@ _TEST_SAFE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 _REQUIRED_PORT = 5433
 _TEST_DATABASE_NAME = "footcap_test"
 _CONNECT_TIMEOUT_SECONDS = 5
+
+# The exact, already-committed, already-statically-reviewed migration file
+# (Task 0.5.10B) this task proves at runtime. Deliberately not a
+# glob/"discover all migrations" mechanism -- there is exactly one
+# migration today, and building generic migration-ordering/discovery
+# machinery here would be the "general production migration framework"
+# this task is explicitly scoped not to create.
+_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[3] / "supabase" / "migrations" / "20260813224850_core_domain_persistence.sql"
+)
 
 
 class DatabaseSafetyError(RuntimeError):
@@ -145,18 +172,17 @@ def test_database_url() -> str:
         pytest.fail(str(exc), pytrace=False)
 
 
-@pytest.fixture()
-def db_connection(test_database_url: str):
-    """A real psycopg connection to the validated local test database.
-    Opened fresh per test and always closed at teardown. No transaction
-    management, migration, or schema mutation happens here -- this
-    fixture proves connectivity only."""
+def _open_connection(url: str):
+    """Shared connect-with-clear-failure helper for every fixture in this
+    module. `url` must already have passed _validate_test_database_url
+    (i.e. come from the test_database_url fixture) -- this function
+    performs no safety validation of its own."""
     import psycopg
 
-    parsed = urlsplit(test_database_url)
+    parsed = urlsplit(url)
     safe_target = f"{parsed.hostname}:{parsed.port or 5432}/{parsed.path.lstrip('/')}"
     try:
-        connection = psycopg.connect(test_database_url, connect_timeout=_CONNECT_TIMEOUT_SECONDS)
+        return psycopg.connect(url, connect_timeout=_CONNECT_TIMEOUT_SECONDS)
     except psycopg.OperationalError as exc:
         pytest.fail(
             f"could not connect to the local test database at {safe_target} "
@@ -164,7 +190,66 @@ def db_connection(test_database_url: str):
             "(see compose.yaml)?",
             pytrace=False,
         )
+
+
+@pytest.fixture()
+def db_connection(test_database_url: str):
+    """A real psycopg connection to the validated local test database.
+    Opened fresh per test and always closed at teardown. No transaction
+    management, migration, or schema mutation happens here -- this
+    fixture proves connectivity only and is deliberately independent of
+    migrated_database, so test_connection.py never applies schema."""
+    connection = _open_connection(test_database_url)
     try:
         yield connection
     finally:
+        connection.close()
+
+
+def _reset_and_apply_migration(url: str) -> None:
+    """DESTRUCTIVE: drops and recreates the public schema, then executes
+    the exact, unmodified core migration file. Callers must only ever
+    pass a URL that has already passed _validate_test_database_url --
+    this function performs no safety validation of its own and must never
+    be exposed to a raw, unvalidated URL."""
+    if not _MIGRATION_PATH.is_file():
+        raise FileNotFoundError(f"expected migration file not found: {_MIGRATION_PATH}")
+    migration_sql = _MIGRATION_PATH.read_text(encoding="utf-8")
+
+    connection = _open_connection(url)
+    try:
+        with connection.cursor() as cur:
+            cur.execute("DROP SCHEMA public CASCADE")
+            cur.execute("CREATE SCHEMA public")
+            cur.execute(migration_sql)
+        connection.commit()
+    finally:
+        connection.close()
+
+
+@pytest.fixture(scope="session")
+def migrated_database(test_database_url: str) -> None:
+    """Session-scoped: resets the public schema and applies the real core
+    migration exactly once per test session, so repeated `pytest -m db`
+    invocations are repeatable regardless of what a previous run left
+    behind (Task 0.5.10E Step 4/15) without depending on any Docker
+    container rebuild. Depending on test_database_url in the signature is
+    what makes the destructive reset safe here -- it guarantees the URL
+    safety guard has already passed before this fixture's body runs."""
+    _reset_and_apply_migration(test_database_url)
+
+
+@pytest.fixture()
+def migrated_db_connection(migrated_database: None, test_database_url: str):
+    """A fresh psycopg connection opened only after the migration has
+    been applied for this session. Depending on `migrated_database` as a
+    fixture parameter (not merely importing it) is what guarantees pytest
+    resolves the migration setup before this connection is opened.
+    Rolled back (never committed) and closed at teardown so no test's
+    inserted rows persist into the next test."""
+    connection = _open_connection(test_database_url)
+    try:
+        yield connection
+    finally:
+        connection.rollback()
         connection.close()
