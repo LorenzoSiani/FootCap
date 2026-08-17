@@ -35,6 +35,17 @@ class RepositoryError(Exception):
     subclasses below."""
 
 
+class RepositoryOperationError(RepositoryError):
+    """An unexpected persistence or infrastructure failure that cannot
+    honestly be represented by a more specific repository error.
+
+    Concrete adapters must keep database-driver details behind this
+    boundary. The original exception may be retained through exception
+    chaining, but it is never exposed as a public attribute or copied
+    into this error's message.
+    """
+
+
 class EntityAlreadyExistsError(RepositoryError):
     """An entity-plus-first-mapping creation operation's requested
     entity identity (competition_id/team_id) already durably exists, AND
