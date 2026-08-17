@@ -1,20 +1,19 @@
 """PostgreSQL adapter implementations for FootCap's repository contracts.
 
-Task 0.5.11E adds the first concrete repositories: read-only Competition
-and Team lookups, and Season's get()/get_or_create(). Provider identity
-mapping and entity-plus-first-mapping creation (CompetitionMappingCreation,
-TeamMappingCreation, ProviderIdentityMappingRepository) remain
-unimplemented here.
+Concrete repositories for Competition, Team, Season, and provider identity
+mapping. Entity-plus-first-mapping creation remains unimplemented here.
 """
 
 from ._competition import PostgresCompetitionRepository
 from ._connection import ConnectionFactory
+from ._mapping import PostgresProviderIdentityMappingRepository
 from ._season import PostgresSeasonRepository
 from ._team import PostgresTeamRepository
 
 __all__ = [
     "ConnectionFactory",
     "PostgresCompetitionRepository",
+    "PostgresProviderIdentityMappingRepository",
     "PostgresSeasonRepository",
     "PostgresTeamRepository",
 ]
