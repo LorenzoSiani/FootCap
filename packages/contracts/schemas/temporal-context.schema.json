@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.footcap.dev/schemas/temporal-context.schema.json",
+  "title": "Temporal Context",
+  "description": "Canonical temporal fields for a source fact or record (Architecture Baseline section 5). Represents field shape and basic per-field validity only. Cross-field temporal rules are Engine/domain logic and are NOT enforced by this schema: event_at < prediction_cutoff for facts describing not-yet-occurred events; source_available_at <= prediction_cutoff for Knowledge-Time Verified data; and which fields are contextually required (requested_at/received_at/ingested_at are required by the Architecture Baseline for FootCap-collected raw provider snapshots; prediction_cutoff is required wherever a prediction context exists). See packages/contracts/README.md.",
+  "type": "object",
+  "properties": {
+    "event_at": {
+      "description": "When the underlying football event actually happened. Null when event time is not applicable to this fact.",
+      "anyOf": [
+        { "$ref": "definitions.schema.json#/$defs/UtcTimestamp" },
+        { "type": "null" }
+      ]
+    },
+    "requested_at": {
+      "description": "When FootCap sent a request to the provider. Required by the Architecture Baseline for FootCap-collected raw snapshots; optional in other uses of this shape.",
+      "anyOf": [
+        { "$ref": "definitions.schema.json#/$defs/UtcTimestamp" },
+        { "type": "null" }
+      ]
+    },
+    "received_at": {
+      "description": "When FootCap received the provider response. Required by the Architecture Baseline for FootCap-collected raw snapshots; optional in other uses of this shape.",
+      "anyOf": [
+        { "$ref": "definitions.schema.json#/$defs/UtcTimestamp" },
+        { "type": "null" }
+      ]
+    },
+    "ingested_at": {
+      "description": "When FootCap persisted the information. Required by the Architecture Baseline for FootCap-collected raw snapshots; optional in other uses of this shape.",
+      "anyOf": [
+        { "$ref": "definitions.schema.json#/$defs/UtcTimestamp" },
+        { "type": "null" }
+      ]
+    },
+    "source_available_at": {
+      "description": "Earliest availability instant FootCap can evidence for this fact. Must always be present as a field; null means UNKNOWN and is the only meaning of null for this field. A missing/omitted field is invalid, not an alternative way to express UNKNOWN (ADR-009 decision 12).",
+      "anyOf": [
+        { "$ref": "definitions.schema.json#/$defs/UtcTimestamp" },
+        { "type": "null" }
+      ]
+    },
+    "prediction_cutoff": {
+      "description": "The point-in-time boundary eligibility rules are evaluated against. Required by the Architecture Baseline wherever a prediction context exists; optional/null in this general shape when no prediction context applies (e.g. raw ingestion).",
+      "anyOf": [
+        { "$ref": "definitions.schema.json#/$defs/UtcTimestamp" },
+        { "type": "null" }
+      ]
+    },
+    "temporal_classification": {
+      "description": "EVENT_TIME_SAFE or KNOWLEDGE_TIME_VERIFIED. A persisted temporal record must always contain this field.",
+      "$ref": "definitions.schema.json#/$defs/TemporalClassification"
+    }
+  },
+  "required": ["source_available_at", "temporal_classification"],
+  "additionalProperties": false
+}

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.footcap.dev/schemas/prediction-feature-snapshot.schema.json",
+  "title": "Prediction Feature Snapshot",
+  "description": "Identity and provenance of the full immutable feature input consumed for exactly one (match_id, prediction_cutoff) prediction context (Architecture Baseline section 7.6). Represents identity/provenance only, not the statistical feature payload/vector itself. Always distinct from a Training Feature Set (Architecture Baseline section 7.9), even when produced by the same feature logic. One immutable Prediction Feature Snapshot may be consumed by multiple Prediction Runs (ADR-009 decision 7).",
+  "type": "object",
+  "properties": {
+    "prediction_feature_snapshot_id": {
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "prediction_feature_snapshot_hash": {
+      "description": "Identifies the exact normalized inference input.",
+      "$ref": "definitions.schema.json#/$defs/Hash"
+    },
+    "dataset_id": {
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "dataset_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Version of the referenced dataset."
+    },
+    "feature_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifies the feature-generation logic only, not the resulting snapshot content (Architecture Baseline section 7.3)."
+    },
+    "match_id": {
+      "description": "FootCap-internal, provider-independent match identity. External provider identifiers (e.g. API-Football match IDs) are stored through provider-specific mappings and are never the domain identity itself (ADR-009 decision 11).",
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "prediction_cutoff": {
+      "$ref": "definitions.schema.json#/$defs/UtcTimestamp"
+    },
+    "temporal_classification": {
+      "$ref": "definitions.schema.json#/$defs/TemporalClassification"
+    },
+    "feature_run_id": {
+      "description": "The Feature Run that produced this Prediction Feature Snapshot.",
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "created_at": {
+      "$ref": "definitions.schema.json#/$defs/UtcTimestamp"
+    }
+  },
+  "required": [
+    "prediction_feature_snapshot_id",
+    "prediction_feature_snapshot_hash",
+    "dataset_id",
+    "dataset_version",
+    "feature_version",
+    "match_id",
+    "prediction_cutoff",
+    "temporal_classification",
+    "feature_run_id",
+    "created_at"
+  ],
+  "additionalProperties": false
+}

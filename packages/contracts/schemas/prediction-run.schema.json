@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.footcap.dev/schemas/prediction-run.schema.json",
+  "title": "Prediction Run",
+  "description": "Connects Training Run, Model Artifact, and Prediction Feature Snapshot to one prediction context, producing a Prediction (Architecture Baseline section 7.7). The integrity rule that the referenced artifact must belong to the referenced training_run_id, and that the snapshot hash must match the input actually used for the stated match/cutoff, is a domain/database concern and is NOT enforced by this schema. See packages/contracts/README.md.",
+  "type": "object",
+  "properties": {
+    "prediction_run_id": {
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "training_run_id": {
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "artifact_id": {
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "prediction_feature_snapshot_id": {
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "prediction_feature_snapshot_hash": {
+      "$ref": "definitions.schema.json#/$defs/Hash"
+    },
+    "feature_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifies the feature-generation logic used, not the snapshot content itself."
+    },
+    "match_id": {
+      "description": "FootCap-internal, provider-independent match identity (ADR-009 decision 11).",
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "prediction_cutoff": {
+      "$ref": "definitions.schema.json#/$defs/UtcTimestamp"
+    },
+    "prediction_horizon": {
+      "$ref": "definitions.schema.json#/$defs/PredictionHorizon"
+    },
+    "evaluation_context": {
+      "$ref": "definitions.schema.json#/$defs/EvaluationContext"
+    },
+    "temporal_classification": {
+      "$ref": "definitions.schema.json#/$defs/TemporalClassification"
+    },
+    "status": {
+      "$ref": "definitions.schema.json#/$defs/RunStatus"
+    },
+    "created_at": {
+      "$ref": "definitions.schema.json#/$defs/UtcTimestamp"
+    }
+  },
+  "required": [
+    "prediction_run_id",
+    "training_run_id",
+    "artifact_id",
+    "prediction_feature_snapshot_id",
+    "prediction_feature_snapshot_hash",
+    "feature_version",
+    "match_id",
+    "prediction_cutoff",
+    "prediction_horizon",
+    "evaluation_context",
+    "temporal_classification",
+    "status",
+    "created_at"
+  ],
+  "additionalProperties": false
+}

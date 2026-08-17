@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.footcap.dev/schemas/run-provenance.schema.json",
+  "title": "Run Provenance",
+  "description": "Common Job Run execution provenance shared by every V1 job type (Architecture Baseline section 13.1). The mandatory downstream dependency policy keyed on status, and the requirement that CI-triggered runs (as opposed to local runs) always carry git_commit/git_ref, are Engine/domain logic and are NOT enforced by this schema. See packages/contracts/README.md.",
+  "type": "object",
+  "$defs": {
+    "JobType": {
+      "type": "string",
+      "enum": ["ingestion", "features", "training", "prediction", "backtest"],
+      "description": "Closed V1 job type vocabulary (Architecture Baseline section 13.1)."
+    }
+  },
+  "properties": {
+    "job_run_id": {
+      "description": "Identifier of the common Job Run provenance record itself (Architecture Baseline section 13; ADR-010). Distinct from job-specific run identifiers -- training_run_id, prediction_run_id, backtest_run_id, and future ingestion_run_id/feature_run_id -- which the common Job Run links to.",
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "job_type": {
+      "$ref": "#/$defs/JobType"
+    },
+    "status": {
+      "description": "Execution status of this run.",
+      "$ref": "definitions.schema.json#/$defs/RunStatus"
+    },
+    "started_at": {
+      "description": "The instant this Job Run entered FootCap's application execution boundary (ADR-010). Required for every status value, including PENDING: PENDING means the Job Run has entered this boundary but has not yet begun active processing. Not external queue-submission time occurring before that boundary, and not a generic record-created-at time.",
+      "$ref": "definitions.schema.json#/$defs/UtcTimestamp"
+    },
+    "finished_at": {
+      "description": "When execution reached a terminal status. Absent while PENDING/RUNNING.",
+      "$ref": "definitions.schema.json#/$defs/UtcTimestamp"
+    },
+    "trigger": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What triggered this run. Kept as a free-form string in V1 rather than a closed enum (ADR-009 decision 9); no downstream policy is defined against a fixed vocabulary for this field."
+    },
+    "git_commit": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Commit the run executed from. Required for CI-triggered runs; may be absent for local runs (ADR-009 decision 10). Which runs are CI-triggered, and the weaker reproducibility guarantee when this field is absent, is Engine/domain logic, not enforced here."
+    },
+    "git_ref": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Branch/tag/ref the run executed from. Same CI-vs-local nullability as git_commit."
+    },
+    "environment": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Execution environment (e.g. CI, local, future worker). Kept as a free-form string in V1 rather than a closed enum (ADR-009 decision 9)."
+    },
+    "workflow_run_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "GitHub Actions workflow run identifier. Present only when triggered via GitHub Actions; absent for local CLI runs (Architecture Baseline section 18)."
+    },
+    "error_summary": {
+      "type": "string",
+      "description": "Human-readable error summary. Populated on FAILED/PARTIAL/CANCELLED; absent otherwise."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Free-form, job-type-specific metadata. Intentionally unconstrained because the Architecture Baseline describes this field as free-form and job-specific; constraining its shape here would either invent structure the baseline does not define, or require a per-job-type schema, both out of scope for the Phase 0 minimum."
+    }
+  },
+  "required": ["job_run_id", "job_type", "status", "started_at", "trigger", "environment"],
+  "additionalProperties": false
+}

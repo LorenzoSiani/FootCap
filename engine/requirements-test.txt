@@ -1,0 +1,18 @@
+# Runtime requirements included below so a complete test environment
+# is installable with one command.
+-r requirements.txt
+# Phase 0.4 test infrastructure dependencies only.
+# jsonschema>=4.18 is required for the referencing-based Registry API
+# used by tests/support/schema_loader.py to resolve cross-file $refs
+# across packages/contracts/schemas/.
+# pytest>=7.0 is required for the pythonpath ini option used in pyproject.toml.
+# referencing>=0.28.4 is declared directly because schema_loader.py imports
+# referencing.Registry, referencing.Resource, and referencing.jsonschema.DRAFT202012
+# directly, not only via jsonschema's transitive dependency graph. 0.28.4 is
+# jsonschema's own declared minimum compatible referencing version (jsonschema's
+# installed dist-info METADATA declares "Requires-Dist: referencing>=0.28.4"); the
+# referencing 0.37.0 actually installed in engine/.venv satisfies this floor and
+# exposes exactly the three names schema_loader.py imports.
+pytest>=7.0
+jsonschema>=4.18
+referencing>=0.28.4

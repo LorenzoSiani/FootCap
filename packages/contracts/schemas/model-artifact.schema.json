@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.footcap.dev/schemas/model-artifact.schema.json",
+  "title": "Model Artifact",
+  "description": "Identity and provenance of the immutable output of one successful Training Run (Architecture Baseline section 7.5). Supports reproducibility and traceability only. Storage mechanism (where/how the artifact bytes are persisted) is intentionally not modeled here, since the storage mechanism itself is an open Architecture Baseline decision (section 31.6); no model registry concept is introduced. Model name/version information is reachable via training_run_id and is not duplicated on this schema.",
+  "type": "object",
+  "properties": {
+    "artifact_id": {
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "training_run_id": {
+      "description": "The Training Run that produced this artifact. Exactly one artifact per successful Training Run.",
+      "$ref": "definitions.schema.json#/$defs/Identifier"
+    },
+    "artifact_hash": {
+      "description": "Checksum identifying the exact artifact content.",
+      "$ref": "definitions.schema.json#/$defs/Hash"
+    },
+    "created_at": {
+      "$ref": "definitions.schema.json#/$defs/UtcTimestamp"
+    }
+  },
+  "required": ["artifact_id", "training_run_id", "artifact_hash", "created_at"],
+  "additionalProperties": false
+}

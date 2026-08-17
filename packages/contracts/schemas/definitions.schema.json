@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.footcap.dev/schemas/definitions.schema.json",
+  "title": "FootCap Shared Definitions",
+  "description": "Reusable $defs shared across FootCap contract schemas: identifier, hash, UTC timestamp, and the closed V1 enums (temporal classification, evaluation context, prediction horizon, publication state, run status). This file has no standalone object shape of its own; it exists only to be referenced via $ref from the domain contract schemas in this directory. Governed by ADR-009 (docs/decisions/ADR-009-contracts-foundation.md); does not modify FOOTCAP_ARCHITECTURE_V1.2.1.md.",
+  "$defs": {
+    "Identifier": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Opaque, stable, immutable identifier. No specific encoding (UUID, ULID, etc.) is assumed by the shared contract; the concrete storage/database type is a separate implementation decision."
+    },
+    "Hash": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Opaque content hash string. The hashing algorithm is not fixed by this contract (open question tracked from the Phase 0.3.1 Contracts Foundation review)."
+    },
+    "UtcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$",
+      "description": "ISO 8601 timezone-aware UTC instant, e.g. 2026-08-10T15:30:00Z. Only the 'Z' (UTC) offset is accepted; numeric offsets and timezone-naive timestamps are rejected to keep a single canonical representation (Architecture Baseline section 5.2; ADR-009 decision 6)."
+    },
+    "TemporalClassification": {
+      "type": "string",
+      "enum": ["EVENT_TIME_SAFE", "KNOWLEDGE_TIME_VERIFIED"],
+      "description": "Closed V1 temporal integrity classification (Architecture Baseline section 5.5). No PENDING/UNKNOWN/UNCLASSIFIED value exists; a persisted record always declares exactly one of these two values (ADR-009 decision 13)."
+    },
+    "EvaluationContext": {
+      "type": "string",
+      "enum": ["PRODUCTION", "BACKTEST", "EXPERIMENT"],
+      "description": "Closed V1 run/prediction context (Architecture Baseline section 7.7). BACKTEST and EXPERIMENT must never be represented as PRODUCTION."
+    },
+    "PredictionHorizon": {
+      "type": "string",
+      "enum": ["PRE_MATCH"],
+      "description": "V1 defines exactly one canonical prediction horizon (Architecture Baseline section 7.7). The enum is closed for V1; it is not silently open-ended."
+    },
+    "PublicationState": {
+      "type": "string",
+      "enum": ["DRAFT", "PUBLISHED", "SUPERSEDED", "WITHDRAWN"],
+      "description": "Frozen V1 prediction publication lifecycle states (Architecture Baseline section 7.8). Valid transitions (DRAFT to PUBLISHED, PUBLISHED to SUPERSEDED, PUBLISHED to WITHDRAWN, and no other) are domain/application logic, not expressed by this enum."
+    },
+    "RunStatus": {
+      "type": "string",
+      "enum": ["PENDING", "RUNNING", "COMPLETED", "PARTIAL", "FAILED", "CANCELLED"],
+      "description": "Closed V1 execution status vocabulary shared by Job Run provenance and Prediction Run (Architecture Baseline sections 13.2 and 7.7)."
+    }
+  }
+}
