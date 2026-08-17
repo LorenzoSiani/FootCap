@@ -120,7 +120,13 @@ def test_target_resolution_requires_no_provider_name():
     assert list(inspect.signature(_resolve_target).parameters) == ["entity_type"]
 
 
-def test_postgres_package_has_no_concrete_repository_or_broad_infrastructure():
+def test_postgres_package_has_no_unit_of_work_or_async_infrastructure():
+    # Task 0.5.11E adds the first concrete PostgresCompetitionRepository/
+    # PostgresTeamRepository/PostgresSeasonRepository classes, so this test
+    # no longer forbids that naming shape outright (an earlier revision
+    # did, back when this package intentionally provided no concrete
+    # repository at all). What remains forbidden -- a generic UnitOfWork/
+    # TransactionManager, or any async entry point -- is unchanged.
     package = importlib.import_module("footcap_engine.repositories.postgres")
     modules = [
         importlib.import_module(info.name)
@@ -130,8 +136,6 @@ def test_postgres_package_has_no_concrete_repository_or_broad_infrastructure():
     for module in [package, *modules]:
         assert forbidden_names.isdisjoint(vars(module))
         for name, value in vars(module).items():
-            if inspect.isclass(value) and value.__module__ == module.__name__:
-                assert not name.startswith("Postgres") or not name.endswith("Repository")
             if inspect.isfunction(value) and value.__module__ == module.__name__:
                 assert not inspect.iscoroutinefunction(value)
 
