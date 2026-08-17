@@ -45,10 +45,13 @@ class IdentityInputError(ValueError):
 
 
 class UnresolvedProviderIdentityError(LookupError):
-    """Raised by IdentityResolver.resolve() when provider_ref carries no
-    mapped FootCap entity identity (ADR-012 decision 11; ADR-011
-    decision 4). Carries the exact original ProviderEntityRef -- the
-    caller must never receive a fabricated or substituted FootCap ID."""
+    """Raised when resolving provider_ref finds no mapped FootCap entity
+    identity (ADR-012 decision 11; ADR-011 decision 4) -- by
+    IdentityResolver.resolve() (in-memory) and, identically, by any
+    ProviderIdentityMappingRepository.resolve() implementation (durable
+    storage; Task 0.5.11A). Carries the exact original ProviderEntityRef
+    -- the caller must never receive a fabricated or substituted FootCap
+    ID."""
 
     def __init__(self, provider_ref: "ProviderEntityRef") -> None:
         super().__init__(f"no FootCap identity mapping for {provider_ref!r}")
